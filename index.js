@@ -4,12 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const { scrapeEntries } = require("./scraper");
 const { buildEntryEmbed } = require("./formatter");
+const USERS = require("./users");
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
 const DISCORD_TOKEN    = process.env.DISCORD_TOKEN;
 const CHANNEL_ID       = process.env.CHANNEL_ID;
-const TRACKED_USERNAME = process.env.TRACKED_USERNAME || "Tracked User";
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "60000", 10);
 const SEEN_FILE        = path.join(__dirname, "seen_entries.json");
 
@@ -20,6 +20,13 @@ if (!DISCORD_TOKEN || !CHANNEL_ID) {
   );
   process.exit(1);
 }
+
+if (!USERS || USERS.length === 0) {
+  console.error("[bot] ERROR: No users defined in users.js.");
+  process.exit(1);
+}
+
+console.log(`[bot] Tracking ${USERS.length} user(s): ${USERS.map((u) => u.name).join(", ")}`);
 
 // ─── State ─────────────────────────────────────────────────────────────────
 
@@ -39,17 +46,22 @@ function saveSeenIds(seenIds) {
   fs.writeFileSync(SEEN_FILE, JSON.stringify([...seenIds]), "utf8");
 }
 
-function fingerprintEntry(entry) {
-  if (entry.id) return entry.id;
-  // Build a key from the raw text content
-  const key = entry.rawLines
-    .filter((l) => l.length > 2)
-    .slice(0, 12)
-    .join("|")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-  return key || entry.rawText.slice(0, 200);
+/**
+ * Fingerprint includes the username so entries from different users
+ * never collide even if they happen to place identical slips.
+ */
+function fingerprintEntry(entry, username) {
+  const base = entry.id
+    ? entry.id
+    : entry.rawLines
+        .filter((l) => l.length > 2)
+        .slice(0, 12)
+        .join("|")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+
+  return `${username}::${base}`;
 }
 
 // ─── Discord client ─────────────────────────────────────────────────────────
@@ -64,10 +76,41 @@ client.once("ready", () => {
   startPolling();
 });
 
-// ─── Polling loop ───────────────────────────────────────────────────────────
+// ─── Polling ────────────────────────────────────────────────────────────────
 
 let seenIds = loadSeenIds();
 let isPolling = false;
+
+async function pollUser(user, channel) {
+  console.log(`[bot] Polling user: ${user.name}`);
+
+  const entries = await scrapeEntries(user.url);
+
+  if (entries.length === 0) {
+    console.log(`[bot] No entries found for ${user.name}.`);
+    return 0;
+  }
+
+  let newCount = 0;
+
+  for (const entry of entries) {
+    const fp = fingerprintEntry(entry, user.name);
+
+    if (!seenIds.has(fp)) {
+      console.log(`[bot] New entry for ${user.name}: ${fp.slice(0, 60)}...`);
+      seenIds.add(fp);
+
+      const embed = buildEntryEmbed(entry, user.name, user.url);
+      await channel.send({ embeds: [embed] });
+      newCount++;
+
+      // Small delay between messages to avoid Discord rate limits
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  return newCount;
+}
 
 async function poll() {
   if (isPolling) {
@@ -78,13 +121,7 @@ async function poll() {
   isPolling = true;
 
   try {
-    console.log(`[bot] Polling at ${new Date().toLocaleTimeString()}...`);
-    const entries = await scrapeEntries();
-
-    if (entries.length === 0) {
-      console.log("[bot] No entries found. Page may have changed structure.");
-      return;
-    }
+    console.log(`[bot] Poll started at ${new Date().toLocaleTimeString()}`);
 
     const channel = await client.channels.fetch(CHANNEL_ID);
     if (!channel || !channel.isTextBased()) {
@@ -92,31 +129,24 @@ async function poll() {
       return;
     }
 
-    let newCount = 0;
+    let totalNew = 0;
 
-    for (const entry of entries) {
-      const fp = fingerprintEntry(entry);
-
-      if (!seenIds.has(fp)) {
-        console.log(`[bot] New entry detected: ${fp.slice(0, 60)}...`);
-        seenIds.add(fp);
-
-        const embed = buildEntryEmbed(entry, TRACKED_USERNAME);
-        await channel.send({ embeds: [embed] });
-        newCount++;
-
-        // Delay between messages to avoid rate limits
-        if (newCount < entries.length) {
-          await new Promise((r) => setTimeout(r, 1000));
-        }
+    // Poll users sequentially to avoid hammering PrizePicks servers.
+    // Swap to Promise.all if you want parallel and have few users.
+    for (const user of USERS) {
+      try {
+        const newCount = await pollUser(user, channel);
+        totalNew += newCount;
+      } catch (err) {
+        console.error(`[bot] Error polling ${user.name}:`, err.message);
       }
     }
 
-    if (newCount > 0) {
+    if (totalNew > 0) {
       saveSeenIds(seenIds);
-      console.log(`[bot] Sent ${newCount} new entry alert(s).`);
+      console.log(`[bot] Sent ${totalNew} new alert(s) across all users.`);
     } else {
-      console.log("[bot] No new entries.");
+      console.log("[bot] No new entries for any user.");
     }
   } catch (err) {
     console.error("[bot] Poll error:", err.message);
@@ -127,11 +157,7 @@ async function poll() {
 
 function startPolling() {
   console.log(`[bot] Starting poll loop every ${POLL_INTERVAL_MS / 1000}s`);
-
-  // Run once on startup
   poll();
-
-  // Then run on interval
   setInterval(poll, POLL_INTERVAL_MS);
 }
 
