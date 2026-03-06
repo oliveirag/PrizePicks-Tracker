@@ -1,4 +1,6 @@
-const { chromium } = require("playwright");
+const { chromium } = require("playwright-extra");
+const StealthPlugin = require("playwright-extra-plugin-stealth");
+chromium.use(StealthPlugin());
 
 /**
  * Launches a headless browser, navigates to the given public lineup page,
