@@ -1,0 +1,17 @@
+{
+  "name": "prizepicks-tracker",
+  "version": "1.0.0",
+  "description": "Tracks a public PrizePicks user's open lineups and posts new entries to a Discord channel in real time.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.3.1",
+    "playwright": "^1.58.2"
+  }
+}

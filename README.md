@@ -30,12 +30,3 @@ cp .env.example .env
 npm start
 ```
 
----
-
-## .env.example
-```
-DISCORD_TOKEN=your_discord_bot_token_here
-CHANNEL_ID=your_channel_id_here
-TRACKED_USERNAME=The Guy
-POLL_INTERVAL_MS=60000
-DEBUG_HTML=false
